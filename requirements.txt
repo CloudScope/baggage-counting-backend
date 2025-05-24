@@ -1,0 +1,7 @@
+opencv-python
+ultralytics
+paho-mqtt
+python-dotenv
+boto3 
+pytesseract
+tesseract
