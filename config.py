@@ -69,3 +69,5 @@ if NATS_MQTT_USE_TLS:
 if S3_ENABLED:
     print(f"EdgeApp Config: S3 Bucket Logs = {S3_BUCKET_NAME_LOGS}")
 print(f"EdgeApp Config: Camera Source   = {CAMERA_SOURCE}")
+
+VIDEO_PLAYBACK_SPEED_FACTOR = float(os.getenv("VIDEO_PLAYBACK_SPEED_FACTOR", 1.0))

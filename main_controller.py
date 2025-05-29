@@ -50,7 +50,7 @@ class BaggageCountingSystem:
             topic_template=config.MQTT_TOPIC_TELEMETRY_TEMPLATE
         )
         if not self.mqtt_handler.connect():
-             print("System WARNING: Failed to connect to MQTT broker on init. Will retry.")
+            print("System WARNING: Failed to connect to MQTT broker on init. Will retry.")
 
 
         # Initialize S3 Uploader (same as before)
@@ -85,7 +85,9 @@ class BaggageCountingSystem:
     def _init_single_camera(self): # New method
         print(f"System: Camera Source: {config.CAMERA_SOURCE}")
         try:
+            print("-----line 88-----")
             camera_src = int(config.CAMERA_SOURCE)
+            print("-----line 90-----")
         except ValueError:
             camera_src = config.CAMERA_SOURCE
         
@@ -133,6 +135,13 @@ class BaggageCountingSystem:
         try:
             while self.running:
                 ret, frame = self.camera.read()
+                if ret and frame is not None:
+                    print("SUCCESS: Camera frame grabbed successfully!")
+                    cv2.imshow("Test Camera Frame", frame)
+                    cv2.waitKey(5000) # Show for 5 seconds
+                    cv2.destroyAllWindows()
+                else:
+                    print("ERROR: Failed to grab frame from camera, even though it's 'opened'.")
                 if not ret or frame is None:
                     print("System Warning: Failed to get frame from camera. Retrying...")
                     time.sleep(1)
@@ -244,6 +253,7 @@ class BaggageCountingSystem:
 
 if __name__ == "__main__":
     system = BaggageCountingSystem()
+    print(f"System DEBUG: system.running state before calling run(): {system.running}")
     if system.running:
         system.run()
     else:
