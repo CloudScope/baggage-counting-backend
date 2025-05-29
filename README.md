@@ -220,37 +220,37 @@ An example MQTT payload will look like:
 
 For deploying this application on AWS, consider the following EC2 instance types:
 
-GPU Instances (Recommended for Real-time Performance)
+- GPU Instances (Recommended for Real-time Performance)
 
-g4dn series (NVIDIA T4 GPUs): Good balance of performance and cost.
+- g4dn series (NVIDIA T4 GPUs): Good balance of performance and cost.
 
-g4dn.xlarge: Often a good starting point for a single stream with a medium YOLO model.
+- g4dn.xlarge: Often a good starting point for a single stream with a medium YOLO model.
 
-g5 series (NVIDIA A10G GPUs): Higher performance if g4dn is insufficient.
+- g5 series (NVIDIA A10G GPUs): Higher performance if g4dn is insufficient.
 
-g5.xlarge: Powerful option.
+- g5.xlarge: Powerful option.
 
 AMI Choice: Use an AWS Deep Learning AMI (DLAMI) for Ubuntu or Amazon Linux 2. These AMIs come with NVIDIA drivers, CUDA, and cuDNN pre-installed, significantly simplifying setup.
 
-CPU-only Instances (If GPU is not an option; expect performance limitations)
+- CPU-only Instances (If GPU is not an option; expect performance limitations)
 
-c6i / c7i series (Compute Optimized): Good CPU power.
+- c6i / c7i series (Compute Optimized): Good CPU power.
 
-c6i.xlarge: A starting point, but real-time will be challenging.
+- c6i.xlarge: A starting point, but real-time will be challenging.
 
-m6i / m7i series (General Purpose): Balanced resources.
+- m6i / m7i series (General Purpose): Balanced resources.
 
 Considerations for CPU-only:
 
-Use very small YOLO models (e.g., yolov8n.pt).
+- Use very small YOLO models (e.g., yolov8n.pt).
 
-Set INFERENCE_IMG_SIZE to a small value (e.g., 320).
+- Set INFERENCE_IMG_SIZE to a small value (e.g., 320).
 
-Increase FRAME_PROCESSING_INTERVAL significantly (e.g., 5, 10+).
+- Increase FRAME_PROCESSING_INTERVAL significantly (e.g., 5, 10+).
 
 General AWS Setup Steps:
 
-Launch EC2 Instance: Choose an appropriate instance type and AMI (DLAMI for GPU).
+- Launch EC2 Instance: Choose an appropriate instance type and AMI (DLAMI for GPU).
 
 Configure Security Group:
 
@@ -258,19 +258,19 @@ Inbound: Allow SSH (port 22 from your IP), NATS MQTT (port 1883, restrict source
 
 Outbound: Allow all or be specific (e.g., for RTSP stream access if external).
 
-Connect via SSH.
+- Connect via SSH.
 
-Install NATS Server (if running on the same instance) and start it with your nats_mqtt.conf.
+- Install NATS Server (if running on the same instance) and start it with your nats_mqtt.conf.
 
-Set up Python Environment and install dependencies (as listed in Step 2 & 3 of local setup).
+- Set up Python Environment and install dependencies (as listed in Step 2 & 3 of local setup).
 
-Transfer Application Files (.env, mqtt_handler.py, process_video.py, model) to the instance.
+- Transfer Application Files (.env, mqtt_handler.py, process_video.py, model) to the instance.
 
-Update .env with correct paths and any AWS-specific configurations (e.g., if NATS runs on a different instance, update MQTT_BROKER_ADDRESS).
+- Update .env with correct paths and any AWS-specific configurations (e.g., if NATS runs on a different instance, update MQTT_BROKER_ADDRESS).
 
-Run the application (consider using nohup, screen, tmux, or a process manager like systemd or supervisor for long-running operation).
+- Run the application (consider using nohup, screen, tmux, or a process manager like systemd or supervisor for long-running operation).
 
-Monitor CPU/GPU utilization, memory, and network traffic.
+- Monitor CPU/GPU utilization, memory, and network traffic.
 
 # Troubleshooting
 
