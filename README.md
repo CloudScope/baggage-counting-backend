@@ -274,49 +274,49 @@ Outbound: Allow all or be specific (e.g., for RTSP stream access if external).
 
 # Troubleshooting
 
-Slow Performance / Low FPS:
+- Slow Performance / Low FPS:
 
-If using GPU, ensure torch.cuda.is_available() is True in logs and nvidia-smi shows GPU utilization.
+- If using GPU, ensure torch.cuda.is_available() is True in logs and nvidia-smi shows GPU utilization.
 
-Try a smaller INFERENCE_IMG_SIZE in .env.
+- Try a smaller INFERENCE_IMG_SIZE in .env.
 
-Increase FRAME_PROCESSING_INTERVAL to process fewer frames.
+- Increase FRAME_PROCESSING_INTERVAL to process fewer frames.
 
-Use a smaller YOLO model (e.g., yolov8s.pt or yolov8n.pt).
+- Use a smaller YOLO model (e.g., yolov8s.pt or yolov8n.pt).
 
-Consider a more powerful EC2 instance if hardware is the bottleneck.
+- Consider a more powerful EC2 instance if hardware is the bottleneck.
 
-Cannot Connect to RTSP Stream:
+- Cannot Connect to RTSP Stream:
 
-Verify the RTSP URL is correct and accessible from the machine running the script (e.g., test with VLC).
+- Verify the RTSP URL is correct and accessible from the machine running the script (e.g., test with VLC).
 
-Check network connectivity and firewalls.
+- Check network connectivity and firewalls.
 
-The OPENCV_FFMPEG_CAPTURE_OPTIONS environment variable in process_video.py can sometimes help with problematic streams.
+- The OPENCV_FFMPEG_CAPTURE_OPTIONS environment variable in process_video.py can sometimes help with problematic streams.
 
 # MQTT Connection Issues:
 
-Verify NATS server is running and the MQTT listener is active (check NATS logs).
+- Verify NATS server is running and the MQTT listener is active (check NATS logs).
 
-Ensure MQTT_BROKER_ADDRESS, MQTT_BROKER_PORT, MQTT_USERNAME, MQTT_PASSWORD in .env are correct and match your NATS configuration.
+- Ensure MQTT_BROKER_ADDRESS, MQTT_BROKER_PORT, MQTT_USERNAME, MQTT_PASSWORD in .env are correct and match your NATS configuration.
 
-Check NATS authorization logs for any permission denials for the MQTT user.
+- Check NATS authorization logs for any permission denials for the MQTT user.
 
-Ensure the EC2 instance's Security Group allows outbound connections to the NATS broker on the MQTT port if NATS is external, or inbound if NATS is on the same EC2.
+- Ensure the EC2 instance's Security Group allows outbound connections to the NATS broker on the MQTT port if NATS is external, or inbound if NATS is on the same EC2.
 
-UnboundLocalError or NameError: Ensure all globally accessed variables in process_video.py (especially those used in finally blocks like cap, writer, mqtt_handler, SHOW_DISPLAY) are initialized to None at the global scope before the main() function.
+- UnboundLocalError or NameError: Ensure all globally accessed variables in process_video.py (especially those used in finally blocks like cap, writer, mqtt_handler, SHOW_DISPLAY) are initialized to None at the global scope before the main() function.
 
 # Future Enhancements
 
-More sophisticated RTSP stream error handling and recovery.
+- More sophisticated RTSP stream error handling and recovery.
 
-Dynamic ROI configuration (e.g., via API or configuration file updates without script restart).
+- Dynamic ROI configuration (e.g., via API or configuration file updates without script restart).
 
-Storing processed data (counts, event details) in a database.
+- Storing processed data (counts, event details) in a database.
 
-Web interface for viewing counts and stream.
+- Web interface for viewing counts and stream.
 
-Containerization with Docker for easier deployment.
+- Containerization with Docker for easier deployment.
 
 
 ```
