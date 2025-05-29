@@ -1,260 +1,307 @@
-# edge_device_app/main_controller.py
+# main_controller.py
+from ultralytics import YOLO
 import cv2
-import time
-from datetime import datetime
 import os
-import signal
-
-import config # Direct import assuming flat structure for now
-from anpr_module import extract_plate_number
-from bag_counter_module import BagCounter
-from local_logger import log_event_to_csv
+import time
 from mqtt_handler import MQTTHandler
-if config.S3_ENABLED and hasattr(config, 'S3_BUCKET_NAME_LOGS'):
-    from mqtt_handler import S3Uploader
+from dotenv import load_dotenv
+import torch # For GPU check
+from datetime import datetime # For timestamps
+from zoneinfo import ZoneInfo
+import json 
+
+# --- 0. Load Environment Variables ---
+load_dotenv()
+
+# --- GPU Check ---
+print(f"[INFO] PyTorch version: {torch.__version__}")
+print(f"[INFO] CUDA available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"[INFO] CUDA device count: {torch.cuda.device_count()}")
+    print(f"[INFO] Current CUDA device: {torch.cuda.current_device()}")
+    print(f"[INFO] Device name: {torch.cuda.get_device_name(torch.cuda.current_device())}")
+    if not torch.cuda.get_device_properties(0).major >= 3: # Basic check for compute capability
+        print("[WARNING] Your GPU's compute capability might be too low for efficient YOLO processing.")
 else:
-    S3Uploader = None
-
-class BaggageCountingSystem:
-    def __init__(self):
-        print("System: Initializing Baggage Counting System (Single Camera Mode)...")
-        self.running = True
-
-        # --- SINGLE CAMERA INITIALIZATION ---
-        self.camera = None
-        self._init_single_camera() # New method
-
-        # Initialize AI Modules (same as before)
-        # ... (ensure self.running is set to False if model loading fails) ...
-        print(f"System: Bag Counter Model Path: {config.YOLO_MODEL_PATH}")
-        if not os.path.exists(config.YOLO_MODEL_PATH) or not self.running: # Check self.running from camera init
-            print(f"System CRITICAL ERROR: YOLO Model not found at {config.YOLO_MODEL_PATH} or camera init failed. Exiting.")
-            self.running = False
-            return
-        self.bag_counter = BagCounter(model_path=config.YOLO_MODEL_PATH,
-                                      confidence_threshold=config.YOLO_CONFIDENCE_THRESHOLD)
-        if self.bag_counter.model is None:
-            print("System CRITICAL ERROR: BagCounter model failed to load. Exiting.")
-            self.running = False
-            return
-
-        # Initialize MQTT Handler (same as before)
-        # ... (ensure mqtt_handler.connect() is called) ...
-        print("System: Initializing MQTT Handler for NATS...")
-        self.mqtt_handler = MQTTHandler(
-            host=config.NATS_MQTT_BROKER_HOST,
-            port=config.NATS_MQTT_BROKER_PORT,
-            client_id=config.MQTT_CLIENT_ID_EDGE,
-            username=config.NATS_MQTT_USERNAME_EDGE,
-            password=config.NATS_MQTT_PASSWORD_EDGE,
-            topic_template=config.MQTT_TOPIC_TELEMETRY_TEMPLATE
-        )
-        if not self.mqtt_handler.connect():
-            print("System WARNING: Failed to connect to MQTT broker on init. Will retry.")
+    print("[WARNING] CUDA is not available. Model will run on CPU, expect very slow performance.")
 
 
-        # Initialize S3 Uploader (same as before)
-        # ...
-        self.s3_uploader = None
-        if config.S3_ENABLED and S3Uploader:
-            print(f"System: Initializing S3 Uploader for bucket: {config.S3_BUCKET_NAME_LOGS}")
-            self.s3_uploader = S3Uploader(bucket_name=config.S3_BUCKET_NAME_LOGS)
-            if self.s3_uploader and not self.s3_uploader.s3_client:
-                print("System WARNING: S3Uploader initialized, but S3 client connection failed.")
-                self.s3_uploader = None
+# --- 1. CONFIGURATION (Loaded from .env) ---
+MODEL_PATH = os.getenv("MODEL_PATH")
+VIDEO_PATH = os.getenv("VIDEO_PATH")
+
+CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.35"))
+TARGET_CLASS_NAME = os.getenv("TARGET_CLASS_NAME", "person")
+INFERENCE_IMG_SIZE = int(os.getenv("INFERENCE_IMG_SIZE", "320")) # Add to .env: e.g., 320, 416, 640
+FRAME_PROCESSING_INTERVAL = int(os.getenv("FRAME_PROCESSING_INTERVAL", "1")) # Add to .env: 1=all, 2=every other
+
+VEHICLE_NO = os.getenv("VEHICLE_NO", "UNKNOWN_VEHICLE")
+
+try:
+    ROI_X1 = int(os.getenv("ROI_X1"))
+    ROI_Y1 = int(os.getenv("ROI_Y1"))
+    ROI_X2 = int(os.getenv("ROI_X2"))
+    ROI_Y2 = int(os.getenv("ROI_Y2"))
+    ROI_BOX = (ROI_X1, ROI_Y1, ROI_X2, ROI_Y2)
+except (TypeError, ValueError) as e:
+    print(f"[ERROR] Invalid or missing ROI coordinates in .env file: {e}. Please define ROI_X1, ROI_Y1, ROI_X2, ROI_Y2.")
+    exit()
+
+ROI_COLOR = (255, 0, 0)
+ROI_THICKNESS = 10
+
+MQTT_BROKER_ADDRESS = os.getenv("MQTT_BROKER_ADDRESS")
+MQTT_BROKER_PORT = os.getenv("MQTT_BROKER_PORT")
+MQTT_USERNAME = os.getenv("MQTT_USERNAME")
+MQTT_PASSWORD = os.getenv("MQTT_PASSWORD")
+MQTT_CLIENT_ID_PREFIX = os.getenv("MQTT_CLIENT_ID_PREFIX")
+MQTT_BASE_TOPIC = os.getenv("MQTT_BASE_TOPIC")
+
+critical_env_vars = ["MODEL_PATH", "VIDEO_PATH", "MQTT_BROKER_ADDRESS", "MQTT_BROKER_PORT",
+                     "MQTT_CLIENT_ID_PREFIX", "MQTT_BASE_TOPIC",
+                     "ROI_X1", "ROI_Y1", "ROI_X2", "ROI_Y2"]
+missing_vars_check = [var for var in critical_env_vars if not os.getenv(var)]
+if missing_vars_check:
+    print(f"[ERROR] Critical environment variables missing from .env: {', '.join(missing_vars_check)}")
+    exit()
+
+MQTT_TOPIC_ROI_COUNT = f"{MQTT_BASE_TOPIC}/{MQTT_CLIENT_ID_PREFIX}/roi/{TARGET_CLASS_NAME.lower()}/passed_count"
+SAVE_OUTPUT_VIDEO = os.getenv("SAVE_OUTPUT_VIDEO", "False").lower() == "true"
+SHOW_DISPLAY = os.getenv("SHOW_DISPLAY", "True").lower() == "true"
+
+mqtt_handler = None
+cap = None
+writer = None
+processing_start_time = None
+total_target_objects_passed_roi = 0
+target_object_ids_in_roi_previously = set()
+annotated_frame_prev = None # For displaying during skipped frames
 
 
-        self.current_vehicle_plate = None
-        self.vehicle_detected_time = None
-        self.processing_vehicle = False # True when ANPR confirmed, now counting bags
-        self.plate_consecutive_detections = 0
-        # self.bag_counting_active_for_vehicle = False # Could be an additional state
+def main():
+    global total_target_objects_passed_roi, target_object_ids_in_roi_previously
+    global mqtt_handler, cap, writer, processing_start_time, annotated_frame_prev
 
-        if not os.path.exists(config.LOG_BASE_DIR) and self.running:
-            try:
-                os.makedirs(config.LOG_BASE_DIR)
-                print(f"System: Created base log directory: {config.LOG_BASE_DIR}")
-            except OSError as e:
-                print(f"System ERROR: Could not create base log directory {config.LOG_BASE_DIR}: {e}")
-                self.running = False
+    output_video_filename_prefix_local = os.getenv("OUTPUT_VIDEO_FILENAME_PREFIX", "processed_video")
+    output_video_path_local = f"{output_video_filename_prefix_local}_{TARGET_CLASS_NAME.lower()}_roi_pass.mp4"
 
-        signal.signal(signal.SIGINT, self.shutdown_handler)
-        signal.signal(signal.SIGTERM, self.shutdown_handler)
-        print("System: Initialization complete. Press Ctrl+C to exit gracefully.")
+    print("[INFO] Initializing MQTT Handler...")
+    mqtt_handler = MQTTHandler(
+        MQTT_BROKER_ADDRESS, MQTT_BROKER_PORT,
+        username=MQTT_USERNAME if MQTT_USERNAME else None,
+        password=MQTT_PASSWORD if MQTT_PASSWORD else None,
+        client_id_prefix=MQTT_CLIENT_ID_PREFIX
+    )
+    mqtt_handler.connect()
+    time.sleep(0.5)
 
-    def _init_single_camera(self): # New method
-        print(f"System: Camera Source: {config.CAMERA_SOURCE}")
-        try:
-            print("-----line 88-----")
-            camera_src = int(config.CAMERA_SOURCE)
-            print("-----line 90-----")
-        except ValueError:
-            camera_src = config.CAMERA_SOURCE
+    print(f"[INFO] Loading Ultralytics YOLO model from: {MODEL_PATH}")
+    try:
+        model = YOLO(MODEL_PATH)
+        if torch.cuda.is_available():
+            print("[INFO] Moving model to GPU.")
+            # model.to('cuda') # YOLO model automatically moves to CUDA if available during inference
+    except Exception as e:
+        print(f"[ERROR] Could not load Ultralytics YOLO model: {e}"); return
+    print("[INFO] Ultralytics YOLO model loaded successfully.")
+
+    CLASS_LABELS = model.names if hasattr(model, 'names') else [f"class_{i}" for i in range(80)]
+    is_target_class_valid = False
+    # (Class validation logic as before) ...
+    if isinstance(CLASS_LABELS, dict):
+        if TARGET_CLASS_NAME in CLASS_LABELS.values(): is_target_class_valid = True
+    elif isinstance(CLASS_LABELS, list):
+        if TARGET_CLASS_NAME in CLASS_LABELS: is_target_class_valid = True
+
+    if not is_target_class_valid:
+        print(f"[ERROR] TARGET_CLASS_NAME '{TARGET_CLASS_NAME}' not found..."); return
+    else:
+        print(f"[INFO] Targeting class: '{TARGET_CLASS_NAME}'. Publishing to topic: {MQTT_TOPIC_ROI_COUNT}")
+
+
+    print(f"[INFO] Opening video file: {VIDEO_PATH}")
+    cap = cv2.VideoCapture(VIDEO_PATH) # Try: cv2.VideoCapture(VIDEO_PATH, cv2.CAP_FFMPEG)
+    if not cap.isOpened(): print(f"[ERROR] Could not open video file: {VIDEO_PATH}"); return
+
+    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps_video = cap.get(cv2.CAP_PROP_FPS)
+    print(f"[INFO] Video: {frame_width}x{frame_height} @ {fps_video:.2f} FPS")
+    print(f"[INFO] Processing every {FRAME_PROCESSING_INTERVAL} frame(s). Inference size: {INFERENCE_IMG_SIZE}px.")
+
+
+    if SAVE_OUTPUT_VIDEO:
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        writer = cv2.VideoWriter(output_video_path_local, fourcc, fps_video, (frame_width, frame_height))
+        if writer.isOpened(): print(f"[INFO] Output video will be saved to: {output_video_path_local}")
+        else: writer = None; print(f"[ERROR] Could not open video writer.")
+
+    total_frames_processed_in_loop = 0 # Frames on which model.track was called
+    total_frames_read = 0 # All frames read from video
+    processing_start_time = time.time()
+    roi_x1, roi_y1, roi_x2, roi_y2 = ROI_BOX
+    frame_skip_counter = 0
+
+    while True:
+        if not cap.isOpened(): print("[ERROR] Video capture is not open."); break
+        ret, frame_bgr = cap.read()
+        if not ret: print("[INFO] End of video stream."); break
         
-        self.camera = cv2.VideoCapture(camera_src)
-        if not self.camera.isOpened():
-            print(f"System ERROR: Cannot open camera: {camera_src}")
-            self.running = False # Critical failure
-            return
-        print("System: Single camera initialized successfully.")
-
-    def get_csv_log_path(self, vehicle_no): # Same as before
-        # ...
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        daily_log_dir = os.path.join(config.LOG_BASE_DIR, today_str)
-        if not os.path.exists(daily_log_dir):
-            try: os.makedirs(daily_log_dir)
-            except OSError as e: print(f"System ERROR creating daily log dir {daily_log_dir}: {e}"); return None
-        safe_vehicle_no = "".join(c if c.isalnum() else "_" for c in vehicle_no)
-        return os.path.join(daily_log_dir, f"{safe_vehicle_no}.csv")
-
-
-    def shutdown_handler(self, signum, frame): # Same as before
-        # ...
-        print(f"\nSystem: Shutdown signal {signal.Signals(signum).name} received. Cleaning up...")
-        self.running = False
-
-    def cleanup(self): # Modified for single camera
-        print("System: Releasing resources...")
-        if self.camera and self.camera.isOpened():
-            self.camera.release()
-            print("System: Camera released.")
-        cv2.destroyAllWindows()
-        if self.mqtt_handler:
-            self.mqtt_handler.disconnect()
-        print("System: Cleanup complete. Exiting.")
-
-    def run(self):
-        if not self.running:
-            print("System: Cannot run due to initialization errors.")
-            self.cleanup()
-            return
-
-        annotated_display_frame = None # For displaying combined annotations
-
-        try:
-            while self.running:
-                ret, frame = self.camera.read()
-                if ret and frame is not None:
-                    print("SUCCESS: Camera frame grabbed successfully!")
-                    cv2.imshow("Test Camera Frame", frame)
-                    cv2.waitKey(5000) # Show for 5 seconds
-                    cv2.destroyAllWindows()
-                else:
-                    print("ERROR: Failed to grab frame from camera, even though it's 'opened'.")
-                if not ret or frame is None:
-                    print("System Warning: Failed to get frame from camera. Retrying...")
-                    time.sleep(1)
-                    # Consider re-initializing camera if persistent
-                    if not self.camera.isOpened(): self._init_single_camera()
-                    if not self.camera.isOpened(): self.running = False; break
-                    continue
-                
-                current_frame_for_processing = frame.copy() # Work on a copy
-                display_frame = frame.copy() # Frame for final display
-
-                # --- ANPR Phase ---
-                if not self.processing_vehicle: # If we haven't confirmed a vehicle yet
-                    # Define ANPR ROI (if specific, otherwise uses whole frame)
-                    # Example: h, w, _ = current_frame_for_processing.shape
-                    # anpr_roi_frame = current_frame_for_processing[0:h//2, 0:w] # Top half for ANPR
-                    anpr_roi_frame = current_frame_for_processing # Or process the whole frame for ANPR
-
-                    plate = extract_plate_number(anpr_roi_frame)
-                    if plate:
-                        if self.current_vehicle_plate == plate:
-                            self.plate_consecutive_detections += 1
-                        else:
-                            self.current_vehicle_plate = plate
-                            self.plate_consecutive_detections = 1
-                        
-                        print(f"System: Potential plate '{plate}', count: {self.plate_consecutive_detections}/{config.ANPR_TRIGGER_THRESHOLD}")
-
-                        if self.plate_consecutive_detections >= config.ANPR_TRIGGER_THRESHOLD:
-                            print(f"System: Vehicle '{self.current_vehicle_plate}' confirmed. Switching to bag counting mode.")
-                            self.processing_vehicle = True # Vehicle confirmed, now focus on bags for this vehicle
-                            self.vehicle_detected_time = datetime.now()
-                            # No need to do bag counting in this same iteration immediately,
-                            # The next loop iteration will enter the `self.processing_vehicle` block.
-                    else: # No plate detected
-                        if self.current_vehicle_plate is not None:
-                            print(f"System: Plate '{self.current_vehicle_plate}' lost. Resetting active plate.")
-                        self.current_vehicle_plate = None
-                        self.plate_consecutive_detections = 0
-                
-                # --- Bag Counting Phase (if a vehicle is confirmed) ---
-                elif self.processing_vehicle and self.current_vehicle_plate:
-                    print(f"System: Bag counting for vehicle '{self.current_vehicle_plate}'...")
-                    # Define Bag Counting ROI (if specific)
-                    # Example: h, w, _ = current_frame_for_processing.shape
-                    # bag_roi_frame = current_frame_for_processing[h//2:h, 0:w] # Bottom half for bags
-                    bag_roi_frame = current_frame_for_processing # Or process whole frame for bags
-
-                    bag_count, annotated_bag_frame = self.bag_counter.count_bags(bag_roi_frame)
-                    print(f"System: Vehicle '{self.current_vehicle_plate}', Bag Count: {bag_count}")
-                    
-                    if annotated_bag_frame is not None:
-                        display_frame = annotated_bag_frame # Show bag detections
-
-                    # --- LOGGING AND REPORTING ---
-                    # This happens ONCE after bag counting for the identified vehicle.
-                    # You might want a trigger to "finalize" the count (e.g., vehicle leaves, button press, timeout)
-                    # For this POC, let's assume we log/report immediately after the first bag count for the vehicle.
-                    
-                    csv_filepath = self.get_csv_log_path(self.current_vehicle_plate)
-                    if csv_filepath:
-                        log_success = log_event_to_csv(self.current_vehicle_plate, bag_count, self.vehicle_detected_time, csv_filepath)
-                        if log_success and self.s3_uploader:
-                            s3_log_key = f"csv_logs/{self.vehicle_detected_time.strftime('%Y-%m-%d')}/{os.path.basename(csv_filepath)}"
-                            self.s3_uploader.upload_file(csv_filepath, s3_log_key)
-                    else:
-                        print("System ERROR: Could not get CSV log path.")
-
-                    telemetry_data = {
-                        "timestamp": self.vehicle_detected_time.isoformat() + "Z",
-                        "vehicle_number": self.current_vehicle_plate,
-                        "bag_count": int(bag_count),
-                        "bay_id": config.BAY_ID
-                    }
-                    self.mqtt_handler.publish_telemetry(config.BAY_ID, telemetry_data)
-                    
-                    print(f"System: Processing for '{self.current_vehicle_plate}' complete. Resetting.")
-                    # Reset for the next vehicle
-                    self.current_vehicle_plate = None
-                    self.processing_vehicle = False
-                    self.plate_consecutive_detections = 0
-                    # Optional: Add a small delay before looking for a new plate
-                    # time.sleep(config.PROCESS_LOOP_DELAY * 10) # e.g., 1 second cooldown
-
-                # --- Display Logic ---
-                # Add text overlays for current state if desired
-                state_text = "Detecting ANPR"
-                if self.processing_vehicle and self.current_vehicle_plate:
-                    state_text = f"Counting Bags for: {self.current_vehicle_plate}"
-                elif self.current_vehicle_plate:
-                    state_text = f"Tracking Plate: {self.current_vehicle_plate} ({self.plate_consecutive_detections})"
-                
-                cv2.putText(display_frame, state_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                # cv2.imshow("Baggage AI System", cv2.resize(display_frame, (960, 540))) # Adjust size as needed
-
-                key = cv2.waitKey(max(1, int(config.PROCESS_LOOP_DELAY * 1000))) & 0xFF
-                if key == ord('q'):
-                    print("System: 'q' pressed, initiating shutdown.")
-                    self.running = False
-                    break
+        total_frames_read += 1
+        frame_skip_counter += 1
         
-        except Exception as e:
-            print(f"System CRITICAL ERROR in main loop: {e}")
-            import traceback
-            traceback.print_exc()
-            self.running = False
-        finally:
-            self.cleanup()
+        current_loop_annotated_frame = None # Frame to display/save for this iteration
+
+        if frame_skip_counter % FRAME_PROCESSING_INTERVAL == 0 or FRAME_PROCESSING_INTERVAL == 1:
+            total_frames_processed_in_loop +=1
+            # --- Perform detection and tracking on this frame ---
+            results = model.track(source=frame_bgr, persist=True, conf=CONFIDENCE_THRESHOLD,
+                                  imgsz=INFERENCE_IMG_SIZE, half=torch.cuda.is_available(), # only use half if cuda is available
+                                  verbose=False)
+            annotated_frame = frame_bgr.copy() # Start with original for this processed frame
+
+            # (Your existing detection, ROI checking, and drawing logic here)
+            # ... (ensure it uses 'annotated_frame')
+            if results and results[0].boxes is not None and results[0].boxes.id is not None:
+                # ... (loop through detections, draw on 'annotated_frame') ...
+                boxes_xyxy = results[0].boxes.xyxy.cpu().numpy()
+                track_ids = results[0].boxes.id.cpu().numpy().astype(int)
+                cls_ids = results[0].boxes.cls.cpu().numpy().astype(int)
+                confs = results[0].boxes.conf.cpu().numpy()
+
+                current_frame_target_objects_in_roi_now = 0
+                for i in range(len(track_ids)):
+                    x1_obj, y1_obj, x2_obj, y2_obj = map(int, boxes_xyxy[i])
+                    track_id, cls_id_val, conf_val = track_ids[i], cls_ids[i], confs[i] # Unpack for clarity
+
+                    class_name = CLASS_LABELS.get(cls_id_val, f"CLS_{cls_id_val}") if isinstance(CLASS_LABELS, dict) else \
+                                 (CLASS_LABELS[cls_id_val] if 0 <= cls_id_val < len(CLASS_LABELS) else f"CLS_{cls_id_val}")
+                    is_target_class = (class_name == TARGET_CLASS_NAME)
+
+                    box_color = (0, 0, 255) if is_target_class else (0, 255, 0)
+                    label = f"ID:{track_id} {class_name} {conf_val:.2f}"
+                    cv2.rectangle(annotated_frame, (x1_obj, y1_obj), (x2_obj, y2_obj), box_color, 2)
+                    cv2.putText(annotated_frame, label, (x1_obj, y1_obj - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, box_color, 2)
+
+                    if is_target_class:
+                        obj_center_x, obj_center_y = (x1_obj + x2_obj) // 2, (y1_obj + y2_obj) // 2
+                        if roi_x1 < obj_center_x < roi_x2 and roi_y1 < obj_center_y < roi_y2:
+                            current_frame_target_objects_in_roi_now += 1
+                            if track_id not in target_object_ids_in_roi_previously:
+                                total_target_objects_passed_roi += 1
+                                target_object_ids_in_roi_previously.add(track_id)
+                                # --- CONSTRUCT AND PUBLISH JSON PAYLOAD ---
+                                #timestamp = datetime.now(ZoneInfo("Asia/Kolkata"))
+                                event_payload = {
+                                    "timestamp": datetime.now().isoformat(),
+                                    "vehicle_no": VEHICLE_NO,
+                                    f"{TARGET_CLASS_NAME.lower()}_count": total_target_objects_passed_roi # Cumulative count
+                                    # You could also send current_frame_target_objects_in_roi_now
+                                    # "current_target_in_roi": current_frame_target_objects_in_roi_now
+                                }
+                                payload_str = json.dumps(event_payload)
+                                print(f"[ROI EVENT] '{TARGET_CLASS_NAME}' (ID: {track_id}) entered. Publishing: {payload_str}")
+
+
+                                #print(f"[ROI EVENT] '{TARGET_CLASS_NAME}' (ID: {track_id}) entered. Total: {total_target_objects_passed_roi}")
+                                if mqtt_handler and mqtt_handler.is_connected():
+                                    #pub_info = mqtt_handler.publish(MQTT_TOPIC_ROI_COUNT, total_target_objects_passed_roi)
+                                    pub_info = mqtt_handler.publish(MQTT_TOPIC_ROI_COUNT, payload_str)
+                                    if pub_info:
+                                        print(f"[DEBUG] MQTT publish call info: MID={pub_info.mid}, RC={pub_info.rc}") # ADD THIS
+                                    else:
+                                        print("[DEBUG] MQTT publish call returned None (likely not connected or error in handler).")
+                                cv2.rectangle(annotated_frame, (x1_obj, y1_obj), (x2_obj, y2_obj), (255, 255,0), 3) # Cyan
+                                cv2.circle(annotated_frame, (obj_center_x, obj_center_y), 7, (255, 255,0), -1)
+                            else:
+                                cv2.circle(annotated_frame, (obj_center_x, obj_center_y), 5, (255, 165, 0), -1) # Orange
+
+            # Draw ROI and text on the (potentially) processed frame
+            cv2.rectangle(annotated_frame, (roi_x1, roi_y1), (roi_x2, roi_y2), ROI_COLOR, ROI_THICKNESS)
+            # (Text drawing for current/total counts as before, using 'annotated_frame')
+            current_count_text = f"Current '{TARGET_CLASS_NAME}' in ROI: {current_frame_target_objects_in_roi_now}"
+            total_passed_text_video = f"Total '{TARGET_CLASS_NAME}' Passed ROI: {total_target_objects_passed_roi}"
+            text_y_pos1 = roi_y1 - 30 if roi_y1 > 40 else roi_y1 + 20
+            text_y_pos2 = roi_y1 - 10 if roi_y1 > 20 else roi_y1 + 40
+            cv2.putText(annotated_frame, current_count_text, (roi_x1, text_y_pos1), cv2.FONT_HERSHEY_SIMPLEX, 0.6, ROI_COLOR, 2)
+            cv2.putText(annotated_frame, total_passed_text_video, (roi_x1, text_y_pos2), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,165,255), 2)
+            
+            annotated_frame_prev = annotated_frame.copy() # Store the latest processed frame
+            current_loop_annotated_frame = annotated_frame
+
+            if frame_skip_counter > 10000: frame_skip_counter = 0 # Reset skip counter periodically
+        
+        else: # This is a skipped frame
+            if annotated_frame_prev is not None:
+                current_loop_annotated_frame = annotated_frame_prev # Use last good annotated frame
+            else:
+                current_loop_annotated_frame = frame_bgr # Fallback to raw frame if no prev
+
+        # FPS Calculation (based on frames read for smoother display FPS)
+        current_time_loop = time.time()
+        elapsed_time_loop = current_time_loop - (processing_start_time if processing_start_time else current_time_loop)
+        if elapsed_time_loop > 0 and current_loop_annotated_frame is not None:
+            # Display FPS based on all frames read to give a sense of video playback speed
+            fps_display = total_frames_read / elapsed_time_loop
+            cv2.putText(current_loop_annotated_frame, f"Display FPS: {fps_display:.2f}", (20, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 128, 255), 2)
+            # Display Processing FPS based on frames actually processed by model
+            if total_frames_processed_in_loop > 0 :
+                fps_processing = total_frames_processed_in_loop / elapsed_time_loop
+                cv2.putText(current_loop_annotated_frame, f"Processing FPS: {fps_processing:.2f}", (20, 60),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 128, 255), 2)
+
+
+        if SAVE_OUTPUT_VIDEO and writer is not None and current_loop_annotated_frame is not None:
+            writer.write(current_loop_annotated_frame)
+        
+        if SHOW_DISPLAY and current_loop_annotated_frame is not None:
+            cv2.imshow(f"Tracking '{TARGET_CLASS_NAME}' in ROI", current_loop_annotated_frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                print("[INFO] Exiting loop due to 'q' press...")
+                break
+    
+    # Summary from main
+    processing_end_time = time.time()
+    total_processing_time_for_video = processing_end_time - (processing_start_time if processing_start_time else processing_end_time)
+    avg_processing_fps = total_frames_processed_in_loop / total_processing_time_for_video if total_processing_time_for_video > 0 and total_frames_processed_in_loop > 0 else 0
+    avg_display_fps = total_frames_read / total_processing_time_for_video if total_processing_time_for_video > 0 and total_frames_read > 0 else 0
+
+
+    print(f"\n[INFO] --- Video Processing Summary (from main) ---")
+    print(f"[INFO] Total frames read from video: {total_frames_read}")
+    print(f"[INFO] Total frames processed by model: {total_frames_processed_in_loop}")
+    if total_frames_read > 0 :
+        print(f"[INFO] Total processing time: {total_processing_time_for_video:.2f} seconds.")
+        print(f"[INFO] Average Display FPS: {avg_display_fps:.2f}")
+        if total_frames_processed_in_loop > 0:
+            print(f"[INFO] Average Model Processing FPS: {avg_processing_fps:.2f}")
+
 
 if __name__ == "__main__":
-    system = BaggageCountingSystem()
-    print(f"System DEBUG: system.running state before calling run(): {system.running}")
-    if system.running:
-        system.run()
-    else:
-        print("System: Exiting due to initialization failure(s).")
+    # (Critical env var checks as before) ...
+    required_env_vars = ["MODEL_PATH", "VIDEO_PATH", "MQTT_BROKER_ADDRESS", "MQTT_BROKER_PORT",
+                           "MQTT_CLIENT_ID_PREFIX", "MQTT_BASE_TOPIC",
+                           "ROI_X1", "ROI_Y1", "ROI_X2", "ROI_Y2",
+                           "INFERENCE_IMG_SIZE", "FRAME_PROCESSING_INTERVAL"] # Added new ones
+    missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+    if missing_vars:
+        print(f"[ERROR] Missing critical environment variables: {', '.join(missing_vars)}. Check .env file.")
+        exit()
+    
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("[INFO] KeyboardInterrupt received by main process. Exiting gracefully...")
+    except Exception as e:
+        print(f"[ERROR] An unexpected error occurred in main execution: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        print(f"\n[INFO] --- Final Script Cleanup ---")
+        if cap is not None and cap.isOpened(): cap.release(); print("[INFO] Video capture released.")
+        if writer is not None: writer.release(); print("[INFO] Video writer released.")
+        if SHOW_DISPLAY: cv2.destroyAllWindows(); print("[INFO] OpenCV windows destroyed.")
+        if mqtt_handler is not None: mqtt_handler.disconnect()
+        print(f"[INFO] Final total unique '{TARGET_CLASS_NAME}' objects passed: {total_target_objects_passed_roi}")
+        print("[INFO] Script finished.")
