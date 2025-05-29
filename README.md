@@ -1,11 +1,3 @@
-
-
-$ python3 -m venv venv
-$ source venv/bin/activate
-$ pip install -r requirements.txt
-$ python main_controller.py
-
-
 # Real-time Baggage Counting from RTSP Stream with YOLO and NATS MQTT
 
 This project implements a real-time object detection and counting system using YOLO models. It processes an RTSP video stream, identifies target objects within defined Regions of Interest (ROIs), and publishes event data (including object counts, timestamps, and vehicle information) to a NATS MQTT broker.
