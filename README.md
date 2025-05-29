@@ -24,6 +24,7 @@ baggage-counting-backend/
 ├── README.md # This file
 └── models/ # (Optional) If your model is local
     └── bags.pt
+└── requirements.txt
 ```
 
 ## Prerequisites
@@ -37,10 +38,10 @@ baggage-counting-backend/
 
 ### 1. Clone the Repository (if applicable) or Create Project Directory
 
-```bash
+```
 git clone <your_repository_url> # Or mkdir my_yolo_nats_counter
-cd your_project_directory
-
+cd baggage-counting-backend
+```
 2. Create Python Virtual Environment (Recommended)
 python3 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
@@ -51,6 +52,10 @@ pip install ultralytics opencv-python paho-mqtt python-dotenv uuid torch torchvi
 # pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cuXXX
 # (Replace cuXXX with your CUDA version, e.g., cu118 or cu121)
 
+    OR
+
+pip install -r requirements.txt
+
 4. Configure NATS Server
 
 Ensure you have NATS Server installed.
@@ -59,6 +64,7 @@ Create a NATS configuration file (e.g., nats_mqtt.conf - an example is provided 
 Key sections in nats_mqtt.conf:
 
 # nats_mqtt.conf
+```
 port: 4222
 http_port: 8222 # Optional monitoring
 
@@ -82,8 +88,7 @@ authorization {
     }
   ]
 }
-
-
+```
 Important:
 
 Update user, password, and permissions in the authorization block.
@@ -91,9 +96,9 @@ Update user, password, and permissions in the authorization block.
 The publish permission (e.g., vision_events.>) must match the MQTT_BASE_TOPIC you will set in the .env file.
 
 Start NATS Server:
-
+```
 nats-server -c nats_mqtt.conf
-
+```
 
 Verify from NATS logs that the MQTT listener on port 1883 is active.
 
@@ -199,7 +204,7 @@ nats sub "vision_events.edge_cam_01.roi_event" --user your_nats_mqtt_user --pass
 (Note: MQTT topic a/b/c maps to NATS subject a.b.c)
 
 An example MQTT payload will look like:
-
+```
 {
   "timestamp": "2023-10-28T10:30:45.123456+00:00",
   "vehicle_no": "OD02BN1234",
@@ -207,7 +212,7 @@ An example MQTT payload will look like:
   "baggage_count_in_roi": 1,
   "triggering_object_id": 42
 }
-
+```
 AWS Deployment (EC2 Instance Recommendations)
 
 For deploying this application on AWS, consider the following EC2 instance types:
