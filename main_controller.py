@@ -34,23 +34,36 @@ INFERENCE_IMG_SIZE = int(os.getenv("INFERENCE_IMG_SIZE", "320"))
 FRAME_PROCESSING_INTERVAL = int(os.getenv("FRAME_PROCESSING_INTERVAL", "1"))
 VEHICLE_NO = os.getenv("VEHICLE_NO", "UNKNOWN_VEHICLE")
 
-# --- Single ROI Configuration ---
-ROI_NAME = os.getenv("ROI_NAME", "DefaultROI")
-try:
-    ROI_X1 = int(os.getenv("ROI_X1"))
-    ROI_Y1 = int(os.getenv("ROI_Y1"))
-    ROI_X2 = int(os.getenv("ROI_X2"))
-    ROI_Y2 = int(os.getenv("ROI_Y2"))
-    if not (ROI_X1 < ROI_X2 and ROI_Y1 < ROI_Y2):
-        print(f"[ERROR] Invalid ROI coordinates for '{ROI_NAME}'. Check .env. Exiting.")
-        exit()
-    ROI_BOX = (ROI_X1, ROI_Y1, ROI_X2, ROI_Y2)
-except (TypeError, ValueError) as e:
-    print(f"[ERROR] Invalid or missing ROI coordinates in .env file: {e}. Exiting.")
+# --- Load Multiple ROI Configurations (handles 1 or 2 defined ROIs) ---
+ROIS_CONFIG = []
+MAX_ROIS_TO_CHECK = 3 # Explicitly checking for ROI_1 and ROI_2
+for i in range(1, MAX_ROIS_TO_CHECK + 1):
+    roi_name = os.getenv(f"ROI_{i}_NAME")
+    if roi_name and roi_name.strip(): # If name is defined and not just whitespace
+        try:
+            x1 = int(os.getenv(f"ROI_{i}_X1"))
+            y1 = int(os.getenv(f"ROI_{i}_Y1"))
+            x2 = int(os.getenv(f"ROI_{i}_X2"))
+            y2 = int(os.getenv(f"ROI_{i}_Y2"))
+            if not (x1 < x2 and y1 < y2): # Basic validation
+                print(f"[WARNING] Invalid coordinates for ROI_{i} ('{roi_name}'). Skipping this ROI.")
+                continue
+            ROIS_CONFIG.append({
+                "name": roi_name,
+                "id": f"roi_{i}", # internal id
+                "box": (x1, y1, x2, y2),
+                "color": (0, 255, 0), # Green colors for ROIs
+                "passed_count": 0,
+                "object_ids_previously_in": set()
+            })
+        except (TypeError, ValueError) as e:
+            print(f"[WARNING] Invalid or missing coordinates for ROI_{i} ('{roi_name}'). Error: {e}. Skipping this ROI.")
+            continue
+if not ROIS_CONFIG:
+    print("[ERROR] No valid ROIs configured in .env file. At least ROI_1_NAME and its coordinates must be set. Exiting.")
     exit()
-print(f"[INFO] Loaded ROI: '{ROI_NAME}' with box {ROI_BOX}")
+print(f"[INFO] Loaded {len(ROIS_CONFIG)} ROIs: {[roi['name'] for roi in ROIS_CONFIG]}")
 
-ROI_COLOR = (255, 0, 0) # Blue for the single ROI
 ROI_THICKNESS = 10
 
 MQTT_BROKER_ADDRESS = os.getenv("MQTT_BROKER_ADDRESS")
@@ -61,15 +74,18 @@ MQTT_CLIENT_ID_PREFIX = os.getenv("MQTT_CLIENT_ID_PREFIX")
 MQTT_BASE_TOPIC = os.getenv("MQTT_BASE_TOPIC")
 
 critical_env_vars = ["MODEL_PATH", "VIDEO_PATH", "MQTT_BROKER_ADDRESS", "MQTT_BROKER_PORT",
-                     "MQTT_CLIENT_ID_PREFIX", "MQTT_BASE_TOPIC", "VEHICLE_NO", "ROI_NAME",
-                     "ROI_X1", "ROI_Y1", "ROI_X2", "ROI_Y2", # ROI vars now direct
+                     "MQTT_CLIENT_ID_PREFIX", "MQTT_BASE_TOPIC", "VEHICLE_NO",
                      "INFERENCE_IMG_SIZE", "FRAME_PROCESSING_INTERVAL"]
+# Check if at least one ROI's base name is present, coordinates are checked during loading
+if not os.getenv("ROI_1_NAME"):
+    critical_env_vars.append("ROI_1_NAME") # Make it critical if ROIS_CONFIG is empty later
+
 missing_vars_check = [var for var in critical_env_vars if not os.getenv(var)]
 if missing_vars_check:
     print(f"[ERROR] Critical .env variables missing: {', '.join(missing_vars_check)}")
     exit()
 
-MQTT_EVENT_TOPIC = f"{MQTT_BASE_TOPIC}/{MQTT_CLIENT_ID_PREFIX}/vehicle_event"
+MQTT_EVENT_TOPIC = f"{MQTT_BASE_TOPIC}/{MQTT_CLIENT_ID_PREFIX}/roi_event"
 
 SAVE_OUTPUT_VIDEO = os.getenv("SAVE_OUTPUT_VIDEO", "False").lower() == "true"
 SHOW_DISPLAY = os.getenv("SHOW_DISPLAY", "True").lower() == "true"
@@ -81,12 +97,7 @@ writer = None
 processing_start_time = None
 annotated_frame_prev = None
 
-# --- ROI State Variables (for the single ROI) ---
-total_target_objects_passed_roi = 0
-object_ids_previously_in_roi = set()
-
-
-# --- RTSP Connection Attempt Logic (same as before) ---
+# RTSP Connection Attempt Logic (same as before)
 MAX_RECONNECT_ATTEMPTS = 5
 RECONNECT_DELAY_SECONDS = 5
 def attempt_rtsp_connect(rtsp_url):
@@ -102,11 +113,11 @@ def attempt_rtsp_connect(rtsp_url):
 
 
 def main():
-    global total_target_objects_passed_roi, object_ids_previously_in_roi # Modified global state
     global mqtt_handler, cap, writer, processing_start_time, annotated_frame_prev
+    # ROIS_CONFIG is global and will be modified
 
     output_video_filename_prefix_local = os.getenv("OUTPUT_VIDEO_FILENAME_PREFIX", "processed_rtsp_stream")
-    output_video_path_local = f"{output_video_filename_prefix_local}_{TARGET_CLASS_NAME.lower()}_single_roi_pass.mp4"
+    output_video_path_local = f"{output_video_filename_prefix_local}_{TARGET_CLASS_NAME.lower()}_multi_roi_pass.mp4"
 
     print("[INFO] Initializing MQTT Handler...")
     mqtt_handler = MQTTHandler(
@@ -130,7 +141,7 @@ def main():
     elif isinstance(CLASS_LABELS, list):
         if TARGET_CLASS_NAME in CLASS_LABELS: is_target_class_valid = True
     if not is_target_class_valid: print(f"[ERROR] TARGET_CLASS_NAME '{TARGET_CLASS_NAME}' not found..."); return
-    else: print(f"[INFO] Targeting class: '{TARGET_CLASS_NAME}'. Publishing events to: {MQTT_EVENT_TOPIC}")
+    else: print(f"[INFO] Targeting class: '{TARGET_CLASS_NAME}'. Publishing ROI events to: {MQTT_EVENT_TOPIC}")
 
     connected_to_stream = False
     for attempt in range(MAX_RECONNECT_ATTEMPTS):
@@ -159,7 +170,6 @@ def main():
     total_frames_read = 0
     processing_start_time = time.time()
     frame_skip_counter = 0
-    roi_x1, roi_y1, roi_x2, roi_y2 = ROI_BOX # Unpack for the single ROI
 
     while True:
         if not cap.isOpened():
@@ -184,7 +194,7 @@ def main():
                                   imgsz=INFERENCE_IMG_SIZE, half=torch.cuda.is_available(),
                                   verbose=False)
             annotated_frame = frame_bgr.copy()
-            current_target_in_roi_now_display = 0 # For display of current objects in ROI
+            current_target_in_roi_counts_display = {roi_cfg["id"]: 0 for roi_cfg in ROIS_CONFIG}
 
             if results and results[0].boxes is not None and results[0].boxes.id is not None:
                 boxes_xyxy = results[0].boxes.xyxy.cpu().numpy()
@@ -206,36 +216,48 @@ def main():
 
                     if is_target_class:
                         obj_center_x, obj_center_y = (x1_obj + x2_obj) // 2, (y1_obj + y2_obj) // 2
-                        if roi_x1 < obj_center_x < roi_x2 and roi_y1 < obj_center_y < roi_y2: # Check against the single ROI
-                            current_target_in_roi_now_display += 1
-                            if track_id not in object_ids_previously_in_roi: # Use single ROI's set
-                                total_target_objects_passed_roi += 1 # Use single ROI's counter
-                                object_ids_previously_in_roi.add(track_id)
-                                
-                                timestamp_iso = datetime.now(timezone.utc).isoformat()
-                                event_payload = {
-                                    "timestamp": timestamp_iso, "vehicle_no": VEHICLE_NO,
-                                    "roi_name": ROI_NAME, # Use the single ROI_NAME from .env
-                                    f"{TARGET_CLASS_NAME.lower()}_count": total_target_objects_passed_roi,
-                                    "triggering_object_id": track_id
-                                }
-                                payload_str = json.dumps(event_payload)
-                                print(f"[ROI EVENT] '{TARGET_CLASS_NAME}' (ID: {track_id}) entered ROI '{ROI_NAME}'. Pub: {payload_str[:100]}...")
-                                if mqtt_handler and mqtt_handler.is_connected():
-                                    mqtt_handler.publish(MQTT_EVENT_TOPIC, payload_str)
-                                cv2.rectangle(annotated_frame, (x1_obj, y1_obj), (x2_obj, y2_obj), ROI_COLOR, 3) # Use single ROI_COLOR
-                                cv2.circle(annotated_frame, (obj_center_x, obj_center_y), 7, ROI_COLOR, -1)
-                            else:
-                                cv2.circle(annotated_frame, (obj_center_x, obj_center_y), 5, ROI_COLOR, -1)
+                        for roi_cfg in ROIS_CONFIG: # Iterate through defined ROIs
+                            roi_x1_cfg, roi_y1_cfg, roi_x2_cfg, roi_y2_cfg = roi_cfg["box"]
+                            if roi_x1_cfg < obj_center_x < roi_x2_cfg and roi_y1_cfg < obj_center_y < roi_y2_cfg:
+                                current_target_in_roi_counts_display[roi_cfg["id"]] += 1
+                                if track_id not in roi_cfg["object_ids_previously_in"]:
+                                    roi_cfg["passed_count"] += 1
+                                    roi_cfg["object_ids_previously_in"].add(track_id)
+                                    
+                                    timestamp = datetime.now("%Y-%m-%d %H:%M:%S")
+                                    event_payload = {
+                                        "timestamp": timestamp, 
+                                        "vehicle_no": VEHICLE_NO,
+                                        "roi_name": roi_cfg["name"], # Name of the ROI that triggered
+                                        # "roi_id": roi_cfg["id"], # Optional internal ID
+                                        f"{TARGET_CLASS_NAME.lower()}_count_in_roi": roi_cfg["passed_count"], # Count specific to this ROI
+                                        "triggering_object_id": track_id
+                                    }
+                                    payload_str = json.dumps(event_payload)
+                                    print(f"[ROI EVENT] '{TARGET_CLASS_NAME}' (ID: {track_id}) entered ROI '{roi_cfg['name']}'. Pub: {payload_str[:100]}...")
+                                    if mqtt_handler and mqtt_handler.is_connected():
+                                        mqtt_handler.publish(MQTT_EVENT_TOPIC, payload_str)
+                                    cv2.rectangle(annotated_frame, (x1_obj, y1_obj), (x2_obj, y2_obj), roi_cfg["color"], 3)
+                                    cv2.circle(annotated_frame, (obj_center_x, obj_center_y), 7, roi_cfg["color"], -1)
+                                else:
+                                    cv2.circle(annotated_frame, (obj_center_x, obj_center_y), 5, roi_cfg["color"], -1)
             
-            # Draw the single ROI box and its counts
-            cv2.rectangle(annotated_frame, (roi_x1, roi_y1), (roi_x2, roi_y2), ROI_COLOR, ROI_THICKNESS)
-            current_count_text = f"Current '{ROI_NAME}': {current_target_in_roi_now_display} now"
-            total_text = f"Total Passed '{ROI_NAME}': {total_target_objects_passed_roi}"
-            text_y_pos_current = roi_y1 - 30 if roi_y1 > 40 else roi_y1 + 20
-            text_y_pos_total = roi_y1 - 10 if roi_y1 > 20 else roi_y1 + 40
-            cv2.putText(annotated_frame, current_count_text, (roi_x1, text_y_pos_current), cv2.FONT_HERSHEY_SIMPLEX, 0.6, ROI_COLOR, 2)
-            cv2.putText(annotated_frame, total_text, (roi_x1, text_y_pos_total), cv2.FONT_HERSHEY_SIMPLEX, 0.6, ROI_COLOR, 2)
+            # Draw all ROI boxes and their counts
+            text_y_start_offset = 30 # Initial offset from top of ROI for text
+            for roi_cfg in ROIS_CONFIG:
+                r_x1, r_y1, r_x2, r_y2 = roi_cfg["box"]
+                cv2.rectangle(annotated_frame, (r_x1, r_y1), (r_x2, r_y2), roi_cfg["color"], ROI_THICKNESS)
+                
+                current_text = f"'{roi_cfg['name']}': {current_target_in_roi_counts_display[roi_cfg['id']]} now"
+                total_text = f"Passed '{roi_cfg['name']}': {roi_cfg['passed_count']}"
+                
+                # Adjust text position to be readable, possibly outside or just above ROI
+                text_y_current = r_y1 - text_y_start_offset if r_y1 > text_y_start_offset + 10 else r_y1 + 20
+                text_y_total = text_y_current + 20 # Place total count below current count
+
+                cv2.putText(annotated_frame, current_text, (r_x1, text_y_current), cv2.FONT_HERSHEY_SIMPLEX, 0.7, roi_cfg["color"], 2)
+                cv2.putText(annotated_frame, total_text, (r_x1, text_y_total), cv2.FONT_HERSHEY_SIMPLEX, 0.7, roi_cfg["color"], 2)
+
 
             annotated_frame_prev = annotated_frame.copy()
             current_loop_annotated_frame = annotated_frame
@@ -243,8 +265,6 @@ def main():
         else:
             current_loop_annotated_frame = annotated_frame_prev if annotated_frame_prev is not None else frame_bgr.copy()
 
-        # (FPS display, video writing/showing as before)
-        # ... (same display logic as before) ...
         current_time_loop = time.time()
         elapsed_time_loop = current_time_loop - (processing_start_time if processing_start_time else current_time_loop)
         if elapsed_time_loop > 0 and current_loop_annotated_frame is not None:
@@ -257,12 +277,11 @@ def main():
         if SAVE_OUTPUT_VIDEO and writer is not None and current_loop_annotated_frame is not None:
             writer.write(current_loop_annotated_frame)
         if SHOW_DISPLAY and current_loop_annotated_frame is not None:
-            cv2.imshow(f"Tracking '{TARGET_CLASS_NAME}' in ROI '{ROI_NAME}' (RTSP)", current_loop_annotated_frame)
+            cv2.imshow(f"Tracking '{TARGET_CLASS_NAME}' in ROIs (RTSP)", current_loop_annotated_frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 print("[INFO] Exiting loop due to 'q' press..."); break
     
-    # (Summary print logic as before, adapted for single ROI)
-    # ... (same summary print structure as before, but referring to single ROI count) ...
+    # (Summary print logic as before)
     processing_end_time = time.time()
     total_processing_time_for_video = processing_end_time - (processing_start_time if processing_start_time else processing_end_time)
     avg_processing_fps = total_frames_processed_in_loop / total_processing_time_for_video if total_processing_time_for_video > 0 and total_frames_processed_in_loop > 0 else 0
@@ -277,15 +296,20 @@ def main():
         if total_frames_processed_in_loop > 0:
             print(f"[INFO] Average Model Processing FPS: {avg_processing_fps:.2f}")
     
-    print(f"\n[INFO] --- Final ROI Count for '{ROI_NAME}' ---")
-    print(f"[INFO] Total '{TARGET_CLASS_NAME}' passed = {total_target_objects_passed_roi}")
+    print("\n[INFO] --- Final ROI Counts ---")
+    for roi_cfg in ROIS_CONFIG:
+        print(f"[INFO] ROI '{roi_cfg['name']}': Total '{TARGET_CLASS_NAME}' passed = {roi_cfg['passed_count']}")
 
 
 if __name__ == "__main__":
     required_env_vars = ["MODEL_PATH", "VIDEO_PATH", "MQTT_BROKER_ADDRESS", "MQTT_BROKER_PORT",
-                           "MQTT_CLIENT_ID_PREFIX", "MQTT_BASE_TOPIC", "VEHICLE_NO", "ROI_NAME",
-                           "ROI_X1", "ROI_Y1", "ROI_X2", "ROI_Y2",
+                           "MQTT_CLIENT_ID_PREFIX", "MQTT_BASE_TOPIC", "VEHICLE_NO",
                            "INFERENCE_IMG_SIZE", "FRAME_PROCESSING_INTERVAL"]
+    # Ensure at least ROI_1_NAME is set (coordinates checked during ROI_CONFIG loading)
+    if not os.getenv("ROI_1_NAME"):
+        print("[ERROR] ROI_1_NAME (and its coordinates) must be defined in .env file.")
+        exit()
+
     missing_vars = [var for var in required_env_vars if not os.getenv(var)]
     if missing_vars:
         print(f"[ERROR] Missing critical environment variables: {', '.join(missing_vars)}. Check .env file.")
