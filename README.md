@@ -23,7 +23,7 @@ baggage-counting-backend/
 ├── main_controller.py # Main Python script for video processing and detection
 ├── README.md # This file
 └── models/ # (Optional) If your model is local
-└── bags.pt
+    └── bags.pt
 ```
 
 ## Prerequisites
