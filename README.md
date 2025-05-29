@@ -47,14 +47,17 @@ python3 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 3. Install Python Dependencies
+```
 pip install ultralytics opencv-python paho-mqtt python-dotenv uuid torch torchvision torchaudio
-# If using GPU, ensure PyTorch is installed with CUDA support:
-# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cuXXX
-# (Replace cuXXX with your CUDA version, e.g., cu118 or cu121)
+```
+If using GPU, ensure PyTorch is installed with CUDA support:
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cuXXX
+(Replace cuXXX with your CUDA version, e.g., cu118 or cu121)
 
     OR
-
+```
 pip install -r requirements.txt
+```
 
 4. Configure NATS Server
 
