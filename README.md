@@ -109,8 +109,8 @@ Verify from NATS logs that the MQTT listener on port 1883 is active.
 
 Create a .env file in the project root with the following content. Modify the placeholder values to match your setup.
 
-# .env
-
+.env
+```
 # --- YOLO Model and Video Paths ---
 MODEL_PATH="yolov8n.pt" # Path to your YOLO model file
 VIDEO_PATH="rtsp://admin:admin%404321@12.23.34.56/cam/realmonitor?channel=1&subtype=0" # Your RTSP URL or local video path
@@ -153,7 +153,7 @@ SAVE_OUTPUT_VIDEO="False" # "True" or "False"
 SHOW_DISPLAY="True"       # "True" or "False"
 OUTPUT_VIDEO_FILENAME_PREFIX="processed_stream"
 OUTPUT_VIDEO_FPS="10" # Default FPS for saved video if stream FPS is unreliable (e.g., for RTSP)
-
+```
 
 Notes on .env configuration:
 
