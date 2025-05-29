@@ -216,7 +216,7 @@ An example MQTT payload will look like:
   "triggering_object_id": 42
 }
 ```
-AWS Deployment (EC2 Instance Recommendations)
+# AWS Deployment (EC2 Instance Recommendations)
 
 For deploying this application on AWS, consider the following EC2 instance types:
 
@@ -272,7 +272,7 @@ Run the application (consider using nohup, screen, tmux, or a process manager li
 
 Monitor CPU/GPU utilization, memory, and network traffic.
 
-Troubleshooting
+# Troubleshooting
 
 Slow Performance / Low FPS:
 
@@ -294,7 +294,7 @@ Check network connectivity and firewalls.
 
 The OPENCV_FFMPEG_CAPTURE_OPTIONS environment variable in process_video.py can sometimes help with problematic streams.
 
-MQTT Connection Issues:
+# MQTT Connection Issues:
 
 Verify NATS server is running and the MQTT listener is active (check NATS logs).
 
@@ -306,7 +306,7 @@ Ensure the EC2 instance's Security Group allows outbound connections to the NATS
 
 UnboundLocalError or NameError: Ensure all globally accessed variables in process_video.py (especially those used in finally blocks like cap, writer, mqtt_handler, SHOW_DISPLAY) are initialized to None at the global scope before the main() function.
 
-Future Enhancements
+# Future Enhancements
 
 More sophisticated RTSP stream error handling and recovery.
 
@@ -318,10 +318,10 @@ Web interface for viewing counts and stream.
 
 Containerization with Docker for easier deployment.
 
-This README provides a comprehensive guide for setting up, configuring, running, and deploying the application. Remember to replace placeholders with your actual information.
 
-
+```
 $ python3 -m venv venv
 $ source venv/bin/activate
 $ pip install -r requirements.txt
 $ python main_controller.py
+```
