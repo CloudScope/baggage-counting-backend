@@ -46,7 +46,7 @@ FRAME_PROCESSING_INTERVAL = int(os.getenv("FRAME_PROCESSING_INTERVAL", "1")) # P
 VEHICLE_NO = os.getenv("VEHICLE_NO", "UNKNOWN_VEHICLE")
 
 ROIS_CONFIG = []
-MAX_ROIS_TO_CHECK = 3 
+MAX_ROIS_TO_CHECK = 1 #3 
 for i in range(1, MAX_ROIS_TO_CHECK + 1):
     roi_name = os.getenv(f"ROI_{i}_NAME")
     if roi_name and roi_name.strip(): 
