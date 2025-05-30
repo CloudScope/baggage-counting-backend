@@ -325,3 +325,166 @@ $ source venv/bin/activate
 $ pip install -r requirements.txt
 $ python main_controller.py
 ```
+
+Running your Python application as a background service (daemon on Linux/macOS, or a service on Windows) is a common requirement for production deployments. The most robust and recommended way to do this on modern Linux systems is using systemd. For other systems or simpler cases, tools like supervisor, pm2 (often used for Node.js but can manage Python scripts), or even nohup (basic) can be used.
+
+
+Using systemd (Recommended for Linux)
+
+1. Create a systemd Service File:
+
+You'll create a .service file that tells systemd how to manage your application.
+
+Path: Usually /etc/systemd/system/your_app_name.service (e.g., /etc/systemd/system/video_processor.service). You'll need sudo privileges to create/edit files here.
+
+Content (video_processor.service):
+```
+[Unit]
+Description=Video Processor Application for Object Counting
+After=network.target nats.service # Or your MQTT broker service if it's also managed by systemd
+                                  # Add other dependencies if your app needs them (e.g., database)
+
+[Service]
+Type=simple # Or 'forking' if your script truly forks into background (not typical for basic Python scripts)
+
+# User and Group to run the service as (IMPORTANT for security)
+# Create a dedicated user if possible, avoid running as root unless absolutely necessary
+User=your_username # Replace with the user who owns the project files and virtual environment
+Group=your_group   # Replace with the group of that user
+
+# Working Directory (IMPORTANT: where your .env, model files, etc., are located)
+WorkingDirectory=/path/to/your/video_processing_project # Replace with the ABSOLUTE path to your project root
+
+# Command to start the service
+# Use absolute paths for python and your script.
+# Activate virtual environment if you use one.
+ExecStart=/path/to/your/video_processing_project/venv/bin/python /path/to/your/video_processing_project/process_video.py
+# Example if no venv, and python3 is in PATH:
+# ExecStart=/usr/bin/python3 /path/to/your/video_processing_project/process_video.py
+
+# Environment Variables (Alternative to .env, or can supplement)
+# You can specify environment variables directly here, but .env is usually cleaner for app config.
+# If your script loads .env, this might not be needed unless for system-level overrides.
+# Environment="PYTHONUNBUFFERED=1" # Good for seeing logs immediately in 'journalctl'
+# EnvironmentFile=/path/to/your/video_processing_project/.env # systemd can load .env directly if configured
+
+# Restart behavior
+Restart=on-failure # Or 'always', 'on-abnormal'
+RestartSec=5s      # Time to wait before restarting
+
+# Standard Output and Error
+# By default, stdout and stderr are sent to the systemd journal.
+# You can redirect them to files if needed, but journalctl is powerful.
+StandardOutput=journal
+StandardError=journal
+# Or to a file:
+# StandardOutput=append:/var/log/video_processor_output.log
+# StandardError=append:/var/log/video_processor_error.log
+
+# Kill signal (SIGINT is usually good for Python to allow try/finally cleanup)
+KillSignal=SIGINT
+TimeoutStopSec=30s # Time to wait for graceful shutdown before sending SIGKILL
+
+[Install]
+WantedBy=multi-user.target # Start on boot in multi-user mode
+```
+
+
+ExecStart: The command to run your script.
+
+Use absolute paths to your Python interpreter (especially if using a virtual environment) and your process_video.py script.
+
+If using a virtual environment, ExecStart should point to the python executable inside the venv/bin/ directory.
+
+
+2. Reload systemd and Manage Your Service:
+
+After creating or modifying the .service file:
+
+Reload systemd daemon:
+```
+sudo systemctl daemon-reload
+```
+
+Enable your service (to start on boot):
+```
+sudo systemctl enable video_processor.service
+```
+Start your service immediately:
+```
+sudo systemctl start video_processor.service
+```
+
+Check the status of your service:
+```
+sudo systemctl status video_processor.service
+```
+
+This will show if it's active (running), any recent log messages, etc.
+
+View logs (from the journal):
+```
+sudo journalctl -u video_processor.service
+
+sudo journalctl -u video_processor.service -f (to follow logs in real-time)
+
+sudo journalctl -u video_processor.service -n 100 (to see the last 100 lines)
+
+sudo journalctl -u video_processor.service --since "1 hour ago"
+```
+
+Stop your service:
+```
+sudo systemctl stop video_processor.service
+```
+
+Restart your service:
+```
+sudo systemctl restart video_processor.service
+```
+
+Disable your service (to prevent start on boot):
+```
+sudo systemctl disable video_processor.service
+```
+
+Alternative: supervisor
+
+supervisor is another popular process control system. It's written in Python and can be easier to configure for some use cases.
+
+Install supervisor:
+```
+sudo apt-get install supervisor # Debian/Ubuntu
+pip install supervisor # using pip
+```
+
+Create a configuration file for your app (e.g., /etc/supervisor/conf.d/video_processor.conf):
+```
+[program:video_processor]
+command=/path/to/your/video_processing_project/venv/bin/python /path/to/your/video_processing_project/process_video.py
+directory=/path/to/your/video_processing_project
+user=your_username
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/supervisor/video_processor_err.log
+stdout_logfile=/var/log/supervisor/video_processor_out.log
+# environment=PYTHONUNBUFFERED=1,MQTT_HOST="broker.example.com" # Can set env vars here
+stopsignal=INT
+```
+
+Update and manage with supervisorctl:
+```
+sudo supervisorctl reread
+sudo supervisorctl update
+sudo supervisorctl start video_processor
+sudo supervisorctl status video_processor
+sudo supervisorctl stop video_processor
+```
+
+Basic: nohup and & (Not recommended for production)
+
+For very simple, non-critical, or testing scenarios:
+```
+nohup /path/to/your/venv/bin/python /path/to/your/process_video.py > /path/to/your/video_processor.log 2>&1 &
+echo $! > /path/to/your/video_processor.pid
+```
