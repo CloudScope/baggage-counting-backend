@@ -323,7 +323,7 @@ Outbound: Allow all or be specific (e.g., for RTSP stream access if external).
 $ python3 -m venv venv
 $ source venv/bin/activate
 $ pip install -r requirements.txt
-$ python main_controller.py
+$ python main.py
 ```
 
 Running your Python application as a background service (daemon on Linux/macOS, or a service on Windows) is a common requirement for production deployments. The most robust and recommended way to do this on modern Linux systems is using systemd. For other systems or simpler cases, tools like supervisor, pm2 (often used for Node.js but can manage Python scripts), or even nohup (basic) can be used.
