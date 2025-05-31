@@ -108,7 +108,7 @@ class ROI:
     passed_count: int = 0
     object_ids_previously_in: Set[int] = field(default_factory=set)
 
-def load_rois_from_env(max_rois: int = 1) -> List[ROI]:
+def load_rois_from_env(max_rois: int) -> List[ROI]:
     """
     Loads ROI configurations from environment variables.
     Returns a list of ROI dataclass instances.
@@ -583,16 +583,16 @@ def main():
         logger.info("--- Final ROI Counts ---")
         for roi_cfg in ROIS_CONFIG:
             roi_x1_cfg, roi_y1_cfg, roi_x2_cfg, roi_y2_cfg = roi_cfg.box
-            cv2.rectangle(annotated_frame_processing, (r_x1, r_y1), (r_x2, r_y2), roi_cfg["color"], ROI_THICKNESS)
+            cv2.rectangle(annotated_frame_processing, (roi_x1_cfg, roi_y1_cfg), (roi_x2_cfg, roi_y2_cfg), roi_cfg.color, ROI_THICKNESS)
 
-            current_text = f"'{roi_cfg['name']}': {current_target_in_roi_counts_display[roi_cfg['id']]} now"
-            total_text = f"Passed '{roi_cfg['name']}': {roi_cfg['passed_count']}"
+            current_text = f"'{roi_cfg.name}': {current_target_in_roi_counts_display.get(roi_cfg.id, 0)} now"
+            total_text = f"Passed '{roi_cfg.name}': {roi_cfg.passed_count}"
 
-            text_y_current = r_y1 - text_y_start_offset if r_y1 > text_y_start_offset + 20 else r_y1 + 20 # Ensure text is visible
-            text_y_total = text_y_current + 20 
+            text_y_current = roi_y1_cfg - text_y_start_offset if roi_y1_cfg > text_y_start_offset + 20 else roi_y1_cfg + 20
+            text_y_total = text_y_current + 20
 
-            cv2.putText(annotated_frame_processing, current_text, (r_x1, text_y_current), cv2.FONT_HERSHEY_SIMPLEX, 0.7, roi_cfg["color"], 2)
-            cv2.putText(annotated_frame_processing, total_text, (r_x1, text_y_total), cv2.FONT_HERSHEY_SIMPLEX, 0.7, roi_cfg["color"], 2)
+            cv2.putText(annotated_frame_processing, current_text, (roi_x1_cfg, text_y_current), cv2.FONT_HERSHEY_SIMPLEX, 0.7, roi_cfg.color, 2)
+            cv2.putText(annotated_frame_processing, total_text, (roi_x1_cfg, text_y_total), cv2.FONT_HERSHEY_SIMPLEX, 0.7, roi_cfg.color, 2)
 
             logger.info(
                 f"ROI '{roi_cfg.name}': Total '{config.target_class_name}' passed = {roi_cfg.passed_count}",
