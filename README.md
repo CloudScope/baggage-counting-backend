@@ -488,3 +488,22 @@ For very simple, non-critical, or testing scenarios:
 nohup /path/to/your/venv/bin/python /path/to/your/process_video.py > /path/to/your/video_processor.log 2>&1 &
 echo $! > /path/to/your/video_processor.pid
 ```
+
+FastAPI Endpoints
+- Health Check
+```
+GET /health
+```
+Response:
+```
+{"status": "ok"}
+```
+
+- Reset All ROI Counts
+```
+POST /reset_counts
+```
+Response:
+```
+{"status": "reset", "message": "All ROI counts have been reset."}
+```

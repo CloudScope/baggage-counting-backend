@@ -11,6 +11,11 @@ from typing import List, Dict, Any
 from dataclasses import dataclass, field
 from typing import Tuple, Set, List, Optional, Dict, Any
 
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+import threading
+import uvicorn
+
 from logger_setup import setup_logger # Import the setup function
 logger = setup_logger(logger_name='BaggageProcessor') # Initialize the main logger for this module
 
@@ -38,7 +43,7 @@ else:
 
 
 # --- 1. CONFIGURATION (Loaded from .env) ---
-logger.info("Loading application configuration from environment variables.")
+#logger.info("Loading application configuration from environment variables.")
 #MODEL_PATH = os.getenv("MODEL_PATH")
 #VIDEO_PATH = os.getenv("VIDEO_PATH") 
 #
@@ -76,6 +81,23 @@ logger.info("Loading application configuration from environment variables.")
 #    exit(1) # Exit with error code
 #logger.info(f"Successfully loaded {len(ROIS_CONFIG)} ROIs: {[roi['name'] for roi in ROIS_CONFIG]}")
 
+app = FastAPI()
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
+
+@app.post("/reset_counts")
+def reset_counts():
+    for roi in ROIS_CONFIG:
+        roi.passed_count = 0
+        roi.object_ids_previously_in.clear()
+    logger.info("All ROI counts and tracked IDs have been reset via API.")
+    return JSONResponse(content={"status": "reset", "message": "All ROI counts have been reset."})
+
+def run_api():
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
 
 @dataclass
 class ROI:
@@ -606,4 +628,6 @@ if __name__ == "__main__":
     # Initial critical environment variable checks are done globally now.
     # The logger is also initialized globally.
     logger.info("Application instance started.")
+    api_thread = threading.Thread(target=run_api, daemon=True)
+    api_thread.start()
     main()

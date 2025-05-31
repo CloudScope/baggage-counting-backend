@@ -7,3 +7,5 @@ pytesseract
 tesseract
 python-json-logger
 python-logstash-async
+fastapi
+uvicorn
