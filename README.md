@@ -20,7 +20,7 @@ This project implements a real-time object detection and counting system using Y
 baggage-counting-backend/
 ├── .env # Environment configuration (sensitive data, paths)
 ├── mqtt_handler.py # Python class for handling MQTT communication
-├── main_controller.py # Main Python script for video processing and detection
+├── main.py # Main Python script for video processing and detection
 ├── README.md # This file
 └── models/ # (Optional) If your model is local
     └── bags.pt
